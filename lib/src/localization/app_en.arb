@@ -1,0 +1,6 @@
+{
+  "appTitle": "osu_tourney",
+  "@appTitle": {
+    "description": "The title of the application"
+  }
+}
