@@ -2,8 +2,9 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class OsuApiService {
-  // Update the base URL to your Render backend
-  static const String _baseUrl = "https://osu-backend.onrender.com";
+  static const String _baseUrl = "https://osu-proxy.onrender.com"; // Updated to use Render proxy
+  final String _clientId = "37763";
+  final String _clientSecret = "UwAh0Dk0LmjJTywxsFYvf5YT04gtOqf0nCUEzg6l";
   String? _accessToken;
 
   final Map<int, String> userIdToUsername = {
@@ -15,80 +16,122 @@ class OsuApiService {
     16342641: 'Kxrlmon',
   };
 
-  // Authenticate by calling the backend's /osu/auth endpoint
+  // Function to authenticate via Render proxy
   Future<void> authenticate() async {
     final response = await http.post(
-      Uri.parse("$_baseUrl/osu/auth"),
+      Uri.parse("$_baseUrl/osu/auth"), // Use Render proxy for authentication
       headers: {'Content-Type': 'application/json'},
     );
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      _accessToken = data['access_token'];
+      _accessToken = data['access_token']; // Save the access token
     } else {
       throw Exception("Failed to authenticate: ${response.body}");
     }
   }
 
-  // Fetch scores for users by calling the backend
+  // Function to fetch scores for users
   Future<List<dynamic>> fetchScoresForUsers(List<int> userIds) async {
     if (_accessToken == null) {
-      await authenticate();
+      await authenticate(); // Authenticate if there's no token
     }
 
-    final response = await http.post(
-      Uri.parse("$_baseUrl/users/scores"),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $_accessToken',
-      },
-      body: jsonEncode({'user_ids': userIds}),
-    );
+    List<Map<String, dynamic>> allScores = [];
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception("Failed to fetch scores for users: ${response.body}");
+    for (int userId in userIds) {
+      final response = await http.get(
+        Uri.parse("$_baseUrl/users/$userId/osu"),
+        headers: {'Authorization': 'Bearer $_accessToken'}, // Send the access token
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final userStats = data['statistics'];
+        if (userStats != null) {
+          allScores.add({
+            'user_id': userId,
+            'username': data['username'],
+            'pp': userStats['pp'],
+            'global_rank': userStats['global_rank'],
+          });
+        }
+      } else {
+        throw Exception("Failed to fetch scores for user $userId: ${response.body}");
+      }
     }
+
+    return allScores;
   }
 
-  // Fetch beatmap scores using the backend
+  // Function to fetch scores for a beatmap
   Future<List<Map<String, dynamic>>> fetchScoresForBeatmap(int beatmapId, List<int> userIds) async {
     if (_accessToken == null) {
-      await authenticate();
+      await authenticate(); // Authenticate if there's no token
     }
 
-    final response = await http.post(
-      Uri.parse("$_baseUrl/beatmaps/$beatmapId/scores"),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $_accessToken',
-      },
-      body: jsonEncode({'user_ids': userIds}),
-    );
+    List<Map<String, dynamic>> allScores = [];
 
-    if (response.statusCode == 200) {
-      return List<Map<String, dynamic>>.from(jsonDecode(response.body));
-    } else {
-      throw Exception("Failed to fetch beatmap scores: ${response.body}");
+    for (int userId in userIds) {
+      final response = await http.get(
+        Uri.parse("$_baseUrl/beatmaps/$beatmapId/scores/users/$userId"),
+        headers: {'Authorization': 'Bearer $_accessToken'}, // Send the access token
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map && data.containsKey('score')) {
+          final scoreData = data['score'];
+          allScores.add({
+            'username': userIdToUsername[userId] ?? 'Unknown',
+            'user_id': userId,
+            'score': scoreData['score'],
+          });
+        } else {
+          // User has not played the map, add a default score of 0
+          allScores.add({
+            'username': userIdToUsername[userId] ?? 'Unknown',
+            'user_id': userId,
+            'score': 0,
+          });
+        }
+      } else {
+        final errorData = jsonDecode(response.body);
+        if (errorData['error'] == null) {
+          // User has not played the map, add a default score of 0
+          allScores.add({
+            'username': userIdToUsername[userId] ?? 'Unknown',
+            'user_id': userId,
+            'score': 0,
+          });
+        } else {
+          throw Exception("Failed to fetch scores for user $userId: ${response.body}");
+        }
+      }
     }
+
+    return allScores;
   }
 
-  // Fetch beatmap difficulties using the backend
+  // Function to fetch beatmap difficulties
   Future<List<Map<String, dynamic>>> fetchBeatmapDifficulties(int beatmapId) async {
     if (_accessToken == null) {
-      await authenticate();
+      await authenticate(); // Authenticate if there's no token
     }
 
     final response = await http.get(
-      Uri.parse("$_baseUrl/beatmaps/$beatmapId/difficulties"),
-      headers: {
-        'Authorization': 'Bearer $_accessToken',
-      },
+      Uri.parse("$_baseUrl/beatmapsets/$beatmapId"),
+      headers: {'Authorization': 'Bearer $_accessToken'}, // Send the access token
     );
 
     if (response.statusCode == 200) {
-      return List<Map<String, dynamic>>.from(jsonDecode(response.body));
+      final data = jsonDecode(response.body);
+      if (data is Map && data.containsKey('beatmaps')) {
+        final beatmaps = data['beatmaps'] as List;
+        return beatmaps.map((beatmap) => beatmap as Map<String, dynamic>).toList();
+      } else {
+        throw Exception("Unexpected response format: ${response.body}");
+      }
     } else {
       throw Exception("Failed to fetch beatmap difficulties: ${response.body}");
     }
